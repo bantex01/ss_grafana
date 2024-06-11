@@ -1,0 +1,44 @@
+---
+SRE:
+  service1:
+    name: "SRE RBA Service"
+    availability:
+      component: 
+        docker: 
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+        inetd: 
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+    rate_expression: 'up{net_host_port=\"8888\"}'
+    error_expression: 'up{net_host_port=\"8888\"}'
+    duration_expression: 'scrape_series_added'
+  service2:
+    name: "SRE Service 2"
+    availability:
+      component:
+        docker:
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+        inetd:
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+    rate_expression: 'up{net_host_port=\"8888\"}'
+    error_expression: 'up{net_host_port=\"8888\"}'
+    duration_expression: 'scrape_series_added'
+
+APP1:
+  service1:
+    name: "APP1 Service"
+    availability:
+      component:
+        docker:
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+        inetd:
+          expression: 'up{net_host_port="8888"}'
+          interval: 60
+    rate_expression: 'up{net_host_port=\"8888\"}'
+    error_expression: 'up{net_host_port=\"8888\"}'
+    duration_expression: 'scrape_series_added'
+

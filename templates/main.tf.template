@@ -1,0 +1,40 @@
+terraform {
+  required_providers {
+    grafana = {
+      source  = "grafana/grafana"
+      version = ">= 2.9.0"
+    }
+  }
+}
+provider "grafana" {
+  alias = "cloud"
+  cloud_access_policy_token = "some_token"
+}
+
+// Step 2: Create a service account and key for the stack
+resource "grafana_cloud_stack_service_account" "cloud_sa" {
+  provider   = grafana.cloud
+  stack_slug = "some_slug" 
+
+  name        = "tf-sa"
+  role        = "Admin"
+  is_disabled = false
+}
+
+resource "grafana_cloud_stack_service_account_token" "cloud_sa" {
+  provider   = grafana.cloud
+  stack_slug = "some_slug" 
+
+  name               = "terraform serviceaccount key"
+  service_account_id = grafana_cloud_stack_service_account.cloud_sa.id
+}
+
+// Step 3: Create resources within the stack
+provider "grafana" {
+  alias = "my_stack"
+
+  url  = "https://some_stack.grafana.net/"
+  auth = grafana_cloud_stack_service_account_token.cloud_sa.key
+}
+
+
