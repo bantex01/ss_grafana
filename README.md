@@ -1,4 +1,4 @@
-# AutoGraf Claude - SRE Monitoring & Alerting
+# AutoGraf - SRE Monitoring & Alerting
 
 An automated SRE (Site Reliability Engineering) monitoring solution that generates Grafana dashboards, recording rules, and alerting rules for Grafana Cloud using Terraform. This project implements SLI/SLO-based monitoring with multi-burn-rate alerting.
 
