@@ -1,44 +1,92 @@
----
 SRE:
-  service1:
-    name: "SRE RBA Service"
-    availability:
-      component: 
-        docker: 
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-        inetd: 
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-    rate_expression: 'up{net_host_port=\"8888\"}'
-    error_expression: 'up{net_host_port=\"8888\"}'
-    duration_expression: 'scrape_series_added'
-  service2:
-    name: "SRE Service 2"
-    availability:
-      component:
-        docker:
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-        inetd:
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-    rate_expression: 'up{net_host_port=\"8888\"}'
-    error_expression: 'up{net_host_port=\"8888\"}'
-    duration_expression: 'scrape_series_added'
-
-APP1:
-  service1:
-    name: "APP1 Service"
-    availability:
-      component:
-        docker:
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-        inetd:
-          expression: 'up{net_host_port="8888"}'
-          interval: 60
-    rate_expression: 'up{net_host_port=\"8888\"}'
-    error_expression: 'up{net_host_port=\"8888\"}'
-    duration_expression: 'scrape_series_added'
-
+  services:
+    otel:
+      name: "OTEL Collector"
+      description: "sre/descriptions/otel.md"
+      rate_expression: 'rate(otelcol_receiver_accepted_metric_points_total[2m])'
+      error_expression: 'rate(otelcol_exporter_send_failed_metric_points_total[2m])'
+      duration_expression: 'scrape_duration_seconds'
+      cpu_expression: 'rate(otelcol_process_cpu_seconds_total{}[5m])'
+      memory_expression: 'rate(otelcol_process_runtime_total_sys_memory_bytes[5m])'      
+      sli:
+        availability:
+          slo: 99.5
+          period: 10080
+          expression: 'up{instance=\"localhost:8888\"}'
+          interval: 1 
+          by_component_expression: 'up{instance=\"localhost:8888\"}'
+          alerting:
+            fast:
+              percentage: 10
+              long: 60
+              short: 10
+            medium:
+              percentage: 25
+              long: 1440
+              short: 120
+            slow:
+              percentage: 50
+              long: 5040
+              short: 420       
+        ExportSuccess:
+          name: "Exporter Success"
+          slo: 99.5
+          period: 10080
+          interval: 1
+          error_expression: 'vector(2543)'
+          total_expression: 'vector(25436)'
+          alerting:
+            medium:
+              percentage: 5
+              long: 90
+              short: 20
+            slow:
+              percentage: 50
+              long: 5040
+              short: 400                             
+    OnlineBanking:
+      name: "Online Banking"
+      description: "sre/descriptions/otel.md"
+      rate_expression: 'rate(otelcol_receiver_accepted_metric_points_total[2m])'
+      error_expression: 'rate(otelcol_exporter_send_failed_metric_points_total[2m])'
+      duration_expression: 'scrape_duration_seconds'
+      cpu_expression: 'rate(otelcol_process_cpu_seconds_total{}[5m])'
+      memory_expression: 'rate(otelcol_process_runtime_total_sys_memory_bytes[5m])'
+      sli:
+        availability:
+          slo: 99.5
+          period: 10080
+          expression: 'up{instance=\"localhost:8888\"}'
+          interval: 1
+          by_component_expression: 'up{instance=\"localhost:8888\"}'
+          alerting:
+            fast:
+              percentage: 10
+              long: 60
+              short: 10
+            medium:
+              percentage: 25
+              long: 1440
+              short: 120
+            slow:
+              percentage: 50
+              long: 5040
+              short: 420
+        API_Balance:
+          name: "API - Balance Query Success"
+          slo: 99.5
+          period: 10080
+          interval: 1
+          error_expression: 'vector(210)'
+          total_expression: 'vector(25436)'
+          alerting:
+            medium:
+              percentage: 5
+              long: 90
+              short: 20
+            slow:
+              percentage: 50
+              long: 5040
+              short: 400
+  dashboards:
+    dir: "sre/dashboards"
