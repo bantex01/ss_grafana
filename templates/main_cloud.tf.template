@@ -1,0 +1,47 @@
+terraform {
+  backend "local" {
+    path = "./terraform.tfstate"
+  }
+  required_providers {
+    grafana = {
+      source = "grafana/grafana"
+      version = ">= 2.9.0"
+    }
+  }
+}
+
+provider "grafana" {
+
+  alias = "cloud"  
+  # Grafana Cloud instance URL (e.g., https://myorg.grafana.net)
+  url  = var.grafana_cloud_url
+  auth = var.grafana_cloud_api_key
+}
+
+variable "grafana_cloud_url" {
+  type        = string
+  description = "Your Grafana Cloud instance URL (e.g., https://myorg.grafana.net)"
+}
+
+variable "grafana_cloud_api_key" {
+  type        = string
+  description = "Your Grafana Cloud API key with Admin permissions"
+  sensitive   = true
+}
+
+variable "grafana_cloud_prometheus_uid" {
+  type        = string
+  description = "The UID of your Grafana Cloud Prometheus datasource"
+  default     = "grafanacloud-prom"
+}
+
+variable "grafana_cloud_stack_id" {
+  type        = string
+  description = "Your Grafana Cloud stack ID (found in your instance URL)"
+}
+
+ variable "grafana_cloud_contact_point" {
+   description = "The contact point for Grafana Cloud alerts"
+   type        = string
+   default     = "grafana-default-email"
+}
