@@ -1,0 +1,333 @@
+{% for folder_key, folder in data.items() %}
+resource "grafana_folder" "{{ folder_key | lower }}_folder" {
+  provider = grafana.my_stack
+  title    = "{{ folder_key }}"
+}
+
+{% if folder.services is defined %}
+{% for service_key, service in folder.services.items() %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ service_key | lower }}_dashboard" {
+  provider = grafana.my_stack
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+
+  config_json = file("${path.module}/{{ folder_key | lower }}_{{ service_key | lower }}_dashboard.json")
+}
+
+{% if service.sli is defined %}
+{% for sli_key, sli in service.sli.items() %}
+{% if sli_key == 'availability' %}
+resource "mimir_rule_group_recording" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}" {
+  provider = mimir.mimir
+  name      = "{{ service_key | lower }}_{{ sli_key | lower }}"
+  namespace = "{{ folder_key }}"
+  interval  = "{{ sli.interval }}m"
+  rule {
+    expr   = "{{ sli.expression }}"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    labels = {
+             sli_time = {{ sli.interval }}
+    }
+  }
+  rule {
+    expr   = "time() * 0"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}"
+    labels = {
+              sli_time = {{ sli.interval }}
+    }
+  }
+  {% if sli.alerting is defined %}
+  {% set slodecimal = 1 - ((sli.slo | float) / 100) %}
+  {% if sli.alerting.fast is defined %}
+  {% set burnpercentage = (sli.alerting.fast.percentage | int) / 100 %}
+  {% set fastburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.fast.long | int)) %}
+  {% set fastburnthreshold = fastburnrate * slodecimal %}
+  {% set shortnum = (sli.alerting.fast.short | int) + 1 %}
+  {% set longnum = (sli.alerting.fast.long | int) + 1 %}
+  rule{
+    expr  = "(({{ sli.alerting.fast.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.fast.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.fast.short }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+  }
+  rule{
+    expr  = "(({{ sli.alerting.fast.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.fast.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.fast.long }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+  }
+  rule{
+    expr  = "vector({{ fastburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+  }
+  {% endif %}
+  {% if sli.alerting.medium is defined %}
+  {% set burnpercentage = (sli.alerting.medium.percentage | int) / 100 %}
+  {% set mediumburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.medium.long | int)) %}
+  {% set mediumburnthreshold = mediumburnrate * slodecimal %}  
+  {% set shortnum = (sli.alerting.medium.short | int) + 1 %}
+  {% set longnum = (sli.alerting.medium.long | int) + 1 %}
+  rule{
+    expr  = "(({{ sli.alerting.medium.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.medium.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.medium.short }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+  }
+  rule{
+    expr  = "(({{ sli.alerting.medium.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.medium.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.medium.long }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+  }
+  rule{
+    expr  = "vector({{ mediumburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+  }     
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  {% set burnpercentage = (sli.alerting.slow.percentage | int) / 100 %}
+  {% set slowburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.slow.long | int)) %}
+  {% set slowburnthreshold = slowburnrate * slodecimal %}    
+  {% set shortnum = (sli.alerting.slow.short | int) + 1 %}
+  {% set longnum = (sli.alerting.slow.long | int) + 1 %}
+  rule{
+    expr  = "(({{ sli.alerting.slow.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.slow.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.slow.short }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+  }
+  rule{
+    expr  = "(({{ sli.alerting.slow.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.slow.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.slow.long }}))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+  }
+  rule{
+    expr  = "vector({{ slowburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+  }       
+  {% endif %}
+
+
+
+
+  {% endif %}
+}
+
+{# Put in alerting here #}
+
+{% if sli.alerting is defined %}
+resource "mimir_rule_group_alerting" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}" {
+  provider = mimir.mimir
+  name      = "{{ service_key | lower }}_{{ sli_key | lower }}_alerts"
+  namespace = "{{ folder_key }}"
+
+{% if sli.alerting.fast is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_fast"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }} > {{ fastburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }} > {{ fastburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Critical"
+    }
+    annotations = {
+      summary = "Fast burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+
+{% endif %}
+
+{% if sli.alerting.medium is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_medium"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }} > {{ mediumburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }} > {{ mediumburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Warning"
+    }
+    annotations = {
+      summary = "Medium burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+
+{% endif %}
+
+{% if sli.alerting.slow is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_slow"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }} > {{ slowburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }} > {{ slowburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Info"
+    }
+    annotations = {
+      summary = "Slow burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+{% endif %}
+
+{% endif %}
+}
+
+{% else %}
+resource "mimir_rule_group_recording" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}" {
+  provider = mimir.mimir
+  name      = "{{ service_key | lower }}_{{ sli_key | lower }}"
+  namespace = "{{ folder_key }}"
+  interval  = "{{ sli.interval }}m"
+  rule {
+    expr   = "{{ sli.error_expression }}"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error"
+    labels = {
+             sli_time = {{ sli.interval }}
+    }
+  }
+  rule {
+    expr   = "{{ sli.total_expression }}"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total"
+    labels = {
+             sli_time = {{ sli.interval }}
+    }
+  }
+  {% if sli.alerting is defined %}
+  {% set slodecimal = 1 - ((sli.slo | float) / 100) %}
+  {% if sli.alerting.fast is defined %}
+
+  {% set burnpercentage = (sli.alerting.fast.percentage | int) / 100 %}
+  {% set fastburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.fast.long | int)) %}
+  {% set fastburnthreshold = fastburnrate * slodecimal %}
+
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.fast.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.fast.short }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+  }
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.fast.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.fast.long }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+  }
+  rule{
+    expr  = "vector({{ fastburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+  }   
+  {% endif %}
+  {% if sli.alerting.medium is defined %}
+  {% set burnpercentage = (sli.alerting.medium.percentage | int) / 100 %}
+  {% set mediumburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.medium.long | int)) %}
+  {% set mediumburnthreshold = mediumburnrate * slodecimal %}
+
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.medium.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.medium.short }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+  }
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.medium.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.medium.long }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+  }
+  rule{
+    expr  = "vector({{ mediumburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+  }   
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  {% set burnpercentage = (sli.alerting.slow.percentage | int) / 100 %}
+  {% set slowburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.slow.long | int)) %}
+  {% set slowburnthreshold = slowburnrate * slodecimal %}
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.slow.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.slow.short }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+  }
+  rule{
+    expr  = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.slow.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.slow.long }}m])),1))"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+  }
+  rule{
+    expr  = "vector({{ slowburnthreshold }})"
+    record = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+  }   
+  {% endif %}
+
+  {% endif %}
+
+}
+
+{# Alerting start #}
+
+{% if sli.alerting is defined %}
+resource "mimir_rule_group_alerting" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}" {
+  provider = mimir.mimir
+  name      = "{{ service_key | lower }}_{{ sli_key | lower }}_alerts"
+  namespace = "{{ folder_key }}"
+
+{% if sli.alerting.fast is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_fast"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }} > {{ fastburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }} > {{ fastburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Critical"
+    }
+    annotations = {
+      summary = "Fast burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+
+{% endif %}
+
+{% if sli.alerting.medium is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_medium"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }} > {{ mediumburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }} > {{ mediumburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Warning"
+    }
+    annotations = {
+      summary = "Medium burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+
+{% endif %}
+
+{% if sli.alerting.slow is defined %}
+  rule {
+    alert       = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_slow"
+    expr        = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }} > {{ slowburnthreshold }} and sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }} > {{ slowburnthreshold }}"
+    for         = "1m"
+    labels      = {
+      severity = "Info"
+    }
+    annotations = {
+      summary = "Slow burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+  }
+
+{% endif %}
+
+
+}
+
+{% endif %}
+
+{# Alerting end #}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if folder.dashboards is defined and folder.dashboards.json_files is defined %}
+{% for dashboard_file in folder.dashboards.json_files %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ dashboard_file | lower | replace('.json', '') | replace('/', '_') | replace('.', '_') }}_dashboard" {
+  provider = grafana.my_stack
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+
+  config_json = file("{{ dashboard_file }}")
+}
+{% endfor %}
+{% endif %}
+
+{% if folder.sli_dashboards is defined %}
+{% for sli_dashboard in folder.sli_dashboards %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ sli_dashboard | lower | replace('.json', '') | replace('/', '_') | replace('.', '_') }}_dashboard" {
+  provider = grafana.my_stack
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+
+  config_json = file("{{ sli_dashboard }}")
+}
+{% endfor %}
+{% endif %}
+
+
+{% endfor %}
+
