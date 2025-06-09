@@ -1,0 +1,2340 @@
+{% for folder_key, folder in data.items() %}
+resource "grafana_folder" "{{ folder_key | lower }}_folder" {
+  provider = grafana.cloud
+  title = "{{ folder_key }}"
+}
+
+{% if folder.services is defined %}
+{% for service_key, service in folder.services.items() %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ service_key | lower }}_dashboard" {
+  provider = grafana.cloud
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+  
+  config_json = file("${path.module}/{{ folder_key | lower }}_{{ service_key | lower }}_dashboard.json")
+}
+
+{% if service.sli is defined %}
+{% for sli_key, sli in service.sli.items() %}
+{% if sli_key == 'availability' %}
+# Recording rules for {{ service_key }} - {{ sli_key }}
+resource "grafana_rule_group" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_recording" {
+  provider         = grafana.cloud
+  name             = "{{ service_key | lower }}_{{ sli_key | lower }}"
+  folder_uid       = grafana_folder.{{ folder_key | lower }}_folder.uid
+  interval_seconds = 60
+  
+  # Availability SLI recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "{{ sli.expression }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {
+      sli_time = "{{ sli.interval }}"
+    }
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+    # Time tracking rule for availability
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "time() * 0"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {
+      sli_time = "{{ sli.interval }}"
+    }
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+  {% if sli.alerting is defined %}
+  {% set slodecimal = 1 - ((sli.slo | float) / 100) %}
+  {% if sli.alerting.fast is defined %}
+  {% set burnpercentage = (sli.alerting.fast.percentage | int) / 100 %}
+  {% set fastburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.fast.long | int)) %}
+  {% set fastburnthreshold = fastburnrate * slodecimal %}
+  {% set shortnum = (sli.alerting.fast.short | int) + 1 %}
+  {% set longnum = (sli.alerting.fast.long | int) + 1 %}
+
+    # Fast burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.fast.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.fast.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.fast.short }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+    # Fast burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.fast.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.fast.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.fast.long }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+  # Fast burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ fastburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+
+    {% if sli.alerting.medium is defined %}
+  {% set burnpercentage = (sli.alerting.medium.percentage | int) / 100 %}
+  {% set mediumburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.medium.long | int)) %}
+  {% set mediumburnthreshold = mediumburnrate * slodecimal %}
+  {% set shortnum = (sli.alerting.medium.short | int) + 1 %}
+  {% set longnum = (sli.alerting.medium.long | int) + 1 %}
+  
+  # Medium burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.medium.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.medium.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.medium.short }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+    # Medium burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.medium.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.medium.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.medium.long }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+  # Medium burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ mediumburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  {% set burnpercentage = (sli.alerting.slow.percentage | int) / 100 %}
+  {% set slowburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.slow.long | int)) %}
+  {% set slowburnthreshold = slowburnrate * slodecimal %}
+  {% set shortnum = (sli.alerting.slow.short | int) + 1 %}
+  {% set longnum = (sli.alerting.slow.long | int) + 1 %}
+
+    # Slow burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.slow.short }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ shortnum }}m])),{{ sli.alerting.slow.short }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ shortnum }}m])),{{ sli.alerting.slow.short }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+    # Slow burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(({{ sli.alerting.slow.long }} - clamp_max(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}[{{ longnum }}m])),{{ sli.alerting.slow.long }})) / clamp_max(sum(count_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:time:{{ sli.interval }}[{{ longnum }}m])),{{ sli.alerting.slow.long }}))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+  # Slow burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ slowburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+  {% endif %}
+}
+
+# Alerting rules for {{ service_key }} - {{ sli_key }}
+{% if sli.alerting is defined %}
+resource "grafana_rule_group" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_alerting" {
+  provider         = grafana.cloud
+  name             = "{{ service_key | lower }}_{{ sli_key | lower }}_alerts"
+  folder_uid       = grafana_folder.{{ folder_key | lower }}_folder.uid
+  interval_seconds = 60
+  
+  {% if sli.alerting.fast is defined %}
+  # Fast burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_fast"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ fastburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ fastburnthreshold }} && $B > {{ fastburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Fast burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Critical"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+
+    {% if sli.alerting.medium is defined %}
+  # Medium burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_medium"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ mediumburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ mediumburnthreshold }} && $B > {{ mediumburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Medium burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Warning"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  # Slow burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_slow"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ slowburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ slowburnthreshold }} && $B > {{ slowburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Slow burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Info"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+}
+{% endif %}
+
+{% else %}
+
+# Recording rules for {{ service_key }} - {{ sli_key }}
+resource "grafana_rule_group" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_recording" {
+  provider         = grafana.cloud
+  name             = "{{ service_key | lower }}_{{ sli_key | lower }}"
+  folder_uid       = grafana_folder.{{ folder_key | lower }}_folder.uid
+  interval_seconds = 60
+  
+  # {{ sli_key }} error recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "{{ sli.error_expression }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {
+      sli_time = "{{ sli.interval }}"
+    }
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # {{ sli_key }} total recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "{{ sli.total_expression }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {
+      sli_time = "{{ sli.interval }}"
+    }
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+  {% if sli.alerting is defined %}
+  {% set slodecimal = 1 - ((sli.slo | float) / 100) %}
+  {% if sli.alerting.fast is defined %}
+  {% set burnpercentage = (sli.alerting.fast.percentage | int) / 100 %}
+  {% set fastburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.fast.long | int)) %}
+  {% set fastburnthreshold = fastburnrate * slodecimal %}
+  
+  # Fast burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.fast.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.fast.short }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+
+    # Fast burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.fast.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.fast.long }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # Fast burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ fastburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+
+
+  # CLAUDE - please change the rule logic from here!!!
+  
+  {% if sli.alerting.medium is defined %}
+  {% set burnpercentage = (sli.alerting.medium.percentage | int) / 100 %}
+  {% set mediumburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.medium.long | int)) %}
+  {% set mediumburnthreshold = mediumburnrate * slodecimal %}
+  
+  # Medium burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.medium.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.medium.short }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # Medium burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.medium.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.medium.long }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # Medium burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ mediumburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  {% set burnpercentage = (sli.alerting.slow.percentage | int) / 100 %}
+  {% set slowburnrate = burnpercentage * ((sli.period | int) / (sli.alerting.slow.long | int)) %}
+  {% set slowburnthreshold = slowburnrate * slodecimal %}
+  
+  # Slow burn rate short window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.slow.short }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.slow.short }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # Slow burn rate long window recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:error[{{ sli.alerting.slow.long }}m])) / clamp_min(sum(sum_over_time(sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:total[{{ sli.alerting.slow.long }}m])),1))"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  
+  # Slow burn threshold recording rule
+  rule {
+    name = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "vector({{ slowburnthreshold }})"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = []
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["B"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "B"
+        type = "reduce"
+      })
+    }
+    
+    annotations = {}
+    labels = {}
+    is_paused = false
+    
+    record {
+      metric = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:threshold"
+      from = "B"
+      target_datasource_uid = var.grafana_cloud_prometheus_uid
+    }
+  }
+  {% endif %}
+  {% endif %}
+}
+
+# Alerting rules for {{ service_key }} - {{ sli_key }}
+{% if sli.alerting is defined %}
+resource "grafana_rule_group" "{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_alerting" {
+  provider         = grafana.cloud
+  name             = "{{ service_key | lower }}_{{ sli_key | lower }}_alerts"
+  folder_uid       = grafana_folder.{{ folder_key | lower }}_folder.uid
+  interval_seconds = 60
+  
+  {% if sli.alerting.fast is defined %}
+  # Fast burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_fast"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:long:{{ sli.alerting.fast.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:fast:short:{{ sli.alerting.fast.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ fastburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ fastburnthreshold }} && $B > {{ fastburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Fast burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Critical"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+
+  {% if sli.alerting.medium is defined %}
+  # Medium burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_medium"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:long:{{ sli.alerting.medium.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:medium:short:{{ sli.alerting.medium.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ mediumburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ mediumburnthreshold }} && $B > {{ mediumburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Medium burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Warning"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+
+  {% if sli.alerting.slow is defined %}
+  # Slow burn alert for {{ sli_key }}
+  rule {
+    name = "sli_{{ folder_key | lower }}_{{ service_key | lower }}_{{ sli_key | lower }}_burn_slow"
+    condition = "C"
+    
+    data {
+      ref_id = "A"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:long:{{ sli.alerting.slow.long }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "A"
+      })
+    }
+    
+    data {
+      ref_id = "B"
+      datasource_uid = var.grafana_cloud_prometheus_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        editorMode = "code"
+        expr = "sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}:burn:slow:short:{{ sli.alerting.slow.short }}"
+        instant = true
+        intervalMs = 1000
+        legendFormat = "__auto"
+        maxDataPoints = 43200
+        range = false
+        refId = "B"
+      })
+    }
+    
+    data {
+      ref_id = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      model = jsonencode({
+        conditions = [{
+          evaluator = {
+            params = [{{ slowburnthreshold }}]
+            type = "gt"
+          }
+          operator = {
+            type = "and"
+          }
+          query = {
+            params = ["C"]
+          }
+          reducer = {
+            params = []
+            type = "last"
+          }
+          type = "query"
+        }]
+        datasource = {
+          type = "__expr__"
+          uid = "__expr__"
+        }
+        expression = "$A > {{ slowburnthreshold }} && $B > {{ slowburnthreshold }}"
+        intervalMs = 1000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "math"
+      })
+    }
+    
+    no_data_state  = "NoData"
+    exec_err_state = "Alerting"
+    for            = "1m"
+    annotations = {
+      summary = "Slow burn alert for sli:{{ folder_key | lower }}:{{ service_key | lower }}:{{ sli_key | lower }}"
+    }
+    labels = {
+      severity = "Info"
+    }
+    is_paused = false
+    
+    notification_settings {
+      contact_point  = var.grafana_cloud_contact_point
+      group_by       = ["alertname", "cluster", "service"]
+      mute_timings   = []
+    }
+  }
+  {% endif %}
+}
+{% endif %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+{% if folder.dashboards is defined and folder.dashboards.json_files is defined %}
+{% for dashboard_file in folder.dashboards.json_files %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ dashboard_file | lower | replace('.json', '') | replace('/', '_') | replace('.', '_') }}_dashboard" {
+  provider = grafana.cloud
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+  
+  config_json = file("{{ dashboard_file }}")
+}
+{% endfor %}
+{% endif %}
+
+{% if folder.sli_dashboards is defined %}
+{% for sli_dashboard in folder.sli_dashboards %}
+resource "grafana_dashboard" "{{ folder_key | lower }}_{{ sli_dashboard | lower | replace('.json', '') | replace('/', '_') | replace('.', '_') }}_dashboard" {
+  provider = grafana.cloud
+  folder = grafana_folder.{{ folder_key | lower }}_folder.id
+  
+  config_json = file("{{ sli_dashboard }}")
+}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+
+# Variables that need to be defined:
+# variable "grafana_cloud_prometheus_uid" {
+#   description = "The UID of the Grafana Cloud Prometheus datasource"
+#   type        = string
+# }
+# 
+# variable "grafana_cloud_contact_point" {
+#   description = "The contact point for Grafana Cloud alerts"
+#   type        = string
+#   default     = "grafana-default-email"
+# }
